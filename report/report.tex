@@ -13,13 +13,15 @@
 \usepackage{microtype}
 \usepackage{xcolor}
 \usepackage{graphicx}
+\usepackage{float}
+\graphicspath{ {./images/} }
 
-\title{Assignment 1: [Your Method Name]}
+\title{Assignment 1: Novel Adaptive HMC}
 
 \author{%
-  Your Name \\
+  George (Tsing) Escobar \\
   Boston University \\
-  \texttt{your-email@bu.edu}
+  \texttt{gescobar@bu.edu}
 }
 
 \begin{document}
@@ -27,44 +29,146 @@
 \maketitle
 
 \begin{abstract}
-A one-paragraph summary of your method, key results, and main takeaways.
+This report presents a novel Adaptive Hamiltonian Monte Carlo (HMC) sampler utilizing Nesterov’s Dual Averaging for dynamic step-size ($\epsilon$) adaptation. Traditional HMC often struggles with manual hyperparameter tuning and poor convergence on complex geometries. By implementing a feedback loop targeting a 85\% acceptance rate, our method automates the transition from exploration to stationarity. We evaluated the sampler against standard Random Walk Metropolis-Hastings and vanilla HMC on the Rosenbrock and Neal’s Funnel benchmarks. Results indicate that the adaptive sampler significantly improves performance in hierarchical landscapes; specifically, in Neal’s Funnel, the novel method achieved a mean $y$ of 0.004 compared to the vanilla mean of -2.387, while reducing standard deviation by over 60\%. While the fixed identity mass matrix remains a bottleneck for high-curvature correlations in the Rosenbrock distribution, the dual-averaging engine demonstrates superior robustness and resilience to suboptimal initialization in scientific sampling tasks. This was done through specific tuning of hyperparameters: leapforg-size and target-acceptance rate.
 \end{abstract}
 
 \section{Introduction}
-
-What is your method and why did you design it this way? What problem or limitation of existing methods does it address?
-
-% Your content here
+After running the standard benchmarks on the Rosenbrock and Neals Funnel Distribution for the simple Hamiltonian Monte Carlo (HMC) sampler, I saw that it generally did better against the Random Walk Mentropolis-Hastings sampler. This led me to conclude that the HMC sampler had likely better chance of being modified in order to perform better than its original benchmarks. Which led me to implement an Adaptive Novel HMC sampler. The Adaptive Novel HMC aims to solve a couple problems that I noticed benchmarking the standard sampler. These distributions create a tricky landscape for ordinary samplers to traverse. With the "banana" structure of Rosenbrock's function to the narrow "neck" of Neal's function, these ordinary samplers cannot handle the complex geometry of these distributions. To solve this, the Adapative Novel HMC acts as an automatic driver: accelerating in flat regions to gain momentum and braking in narrow regions to maintain stability. Letting the sampler fine tune itself as it runs addresses the core limitation of the ordinary HMC implementation which often gets stuck or diverges when encoutering these complex gemeotries. This gives the sampler the ability to move through the landscape in a far more efficient and effective manner, while reducing the amount of times it diverges, allowing it to better map out the region.
 
 \section{Method}
 
-Technical description of your algorithm. Include pseudocode if helpful.
+The Adaptive Novel HMC sampler is designed to solve the manual tuning problem by treating the step size ($\epsilon$) as a dynamic variable rather than a static guess. To do this, I implemented an adaptation engine based on Nesterov’s Dual Averaging. This allows the sampler to "learn" the landscape as it moves, adjusting its stride to hit a specific performance target.
 
-% Your content here
+\subsection{The Adaptation Engine}
+The sampler aims for a target acceptance rate of $\delta = 85\%$. This means the algorithm is constantly trying to find a balance where 85\% of its jumps are successful. The logic follows a feedback loop:
+
+\begin{itemize}
+    \item \textbf{Error Calculation:} At every step, the sampler calculates the error between the target and the actual result: $H_t = \delta - \alpha_t$. In my implementation, this is calculated as: \\
+    \texttt{new\_running\_avg\_err = (1.0 - weight) * running\_avg\_err + weight * (target\_acc - alpha)} \\
+    If the error is positive, it means we are rejecting too many samples and need to ``brake'' by shrinking the step size.
+    
+    \item \textbf{The Smoothing Filter:} I used a weighted average to track this error. Using a delay parameter ($t_0 = 10$) prevents the sampler from overreacting and ``swerving'' too hard during the first few noisy iterations: \\
+    \texttt{new\_step\_count = step\_count + 1.0} \\
+    \texttt{weight = 1.0 / (new\_step\_count + delay)}
+
+    \item \textbf{Step-Size Adjustment:} The final step size is updated in log-space, effectively shrinking $\epsilon$ when the landscape gets steep and expanding it when the path is clear: \\
+    \texttt{log\_eps = target\_log\_step - (jnp.sqrt(new\_step\_count) / adaptation\_speed) * new\_running\_avg\_err} \\
+    \texttt{next\_step\_size = jnp.exp(log\_eps)}
+\end{itemize}
+
 
 \section{Experiments}
 
-Results on both benchmarks. Include visualizations (samples, traces) and quantitative diagnostics (ESS, acceptance rates). Compare to vanilla MH and HMC baselines.
+\section{Experimental Results and Analysis}
 
-% Your content here
-% Tip: Use \includegraphics to add figures from your notebook
+\subsection{Vanilla Baselines (Control)}
+We established baselines using Random Walk Metropolis-Hastings (RWMH) and standard Hamiltonian Monte Carlo (HMC). The following figures illustrate the performance bottlenecks of standard methods on highly correlated and hierarchical distributions.
+
+\begin{figure}[H]
+    \centering
+    \begin{minipage}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{vanilla_rwmh_rosenbrock_trace_plot.png}
+        \caption{Vanilla RWMH Trace (Rosenbrock)}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{vanilla_hmc_rosenbrock_trace_plot.png}
+        \caption{Vanilla HMC Trace (Rosenbrock)}
+    \end{minipage}
+\end{figure}
+
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{vanilla_samplers_autocorrelations.png}
+    \caption{Autocorrelation comparison across vanilla baselines.}
+\end{figure}
+
+\subsection{Novel HMC: Standardized (STD) Analysis}
+To account for the extreme differences in scale within Neal's Funnel, we analyzed the standardized trace plots. This "whitening" process reveals how efficiently the sampler explores the narrow regions of the parameter space.
+
+\begin{figure}[H]
+    \centering
+    \begin{minipage}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{novel_hmc_neals_funnel_std_trace_plot.png}
+        \caption{Standardized Trace: Neal's Funnel}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{novel_hmc_rosebrock_std_trace_plot.png}
+        \caption{Standardized Trace: Rosenbrock}
+    \end{minipage}
+\end{figure}
+
+\subsubsection{Experiment 2: Standard Integration (n\_leapfrog = 15, target\_acc = 0.75)}
+Reducing the leapfrog steps allows for faster sampling but may struggle with the "neck" of the funnel.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcccc}
+\hline
+\textbf{Method} & \textbf{Variable} & \textbf{Mean} & \textbf{SD} & \textbf{HDI (3\% - 97\%)} \\ \hline
+Vanilla HMC & $x$ & 0.331 & 3.083 & [-5.926, 5.481] \\
+            & $y$ & -2.387 & 15.683 & [-13.667, 13.108] \\ \hline
+\textbf{Novel HMC} & $x$ & \textbf{0.703} & \textbf{2.401} & \textbf{[-3.579, 5.013]} \\
+            & $y$ & \textbf{-0.277} & \textbf{5.481} & \textbf{[-8.234, 7.788]} \\ \hline
+\end{tabular}
+\caption{Comparison of Vanilla vs. Novel HMC on Neal's Funnel (Target Acc: 0.75).}
+\end{table}
+
+\subsection{Comparative Summary}
+The final evaluation compares the density coverage of our novel method against the provided baselines.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{vanilla_vs_novel_neals_funnel_distribution.png}
+    \includegraphics[width=0.48\textwidth]{vanilla_vs_novel_sampler_distribution.png}
+    \caption{Head-to-head distribution comparison: Vanilla vs. Novel Sampler.}
+\end{figure}
+
+\subsection{Statistical Comparison: Neal's Funnel}
+
+The following tables summarize the empirical mean, standard deviation (SD), and 94\% Highest Density Intervals (HDI) for the Neal's Funnel benchmark. 
+
+\subsubsection{Experiment 1: Optimized Integration (n\_leapfrog = 50, target\_acc = 0.85)}
+In this configuration, we prioritized a high acceptance rate and high precision per step. 
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcccc}
+\hline
+\textbf{Method} & \textbf{Variable} & \textbf{Mean} & \textbf{SD} & \textbf{HDI (3\% - 97\%)} \\ \hline
+Vanilla HMC & $x$ & 0.331 & 3.083 & [-5.926, 5.481] \\
+            & $y$ & -2.387 & 15.683 & [-13.667, 13.108] \\ \hline
+\textbf{Novel HMC} & $x$ & \textbf{0.518} & \textbf{2.554} & \textbf{[-3.911, 5.262]} \\
+            & $y$ & \textbf{0.004} & \textbf{5.807} & \textbf{[-9.284, 8.267]} \\ \hline
+\end{tabular}
+\caption{Comparison of Vanilla vs. Novel HMC on Neal's Funnel (Target Acc: 0.85).}
+\end{table}
+
 
 \section{Discussion}
 
-Where does your method work well? Where does it struggle? What would you try next?
-
-% Your content here
+The performance of the Novel Adaptive HMC highlights a successful shift from manual tuning to algorithmic robustness. Its primary strength is the automated adaptation via Dual Averaging, which effectively lets the sampler find its own "Goldilocks" step size ($\epsilon$). In my testing, the sampler achieved stationarity so rapidly that the final results remained consistent whether or not I discarded a 10,000-sample burn-in. This proves the method is resilient and can handle suboptimal starting conditions far better than the vanilla version.However, the sampler still hits a bottleneck when dealing with the tight parameter correlation in the Rosenbrock "banana." Because I used a fixed Identity Mass Matrix, the algorithm assumes a simple, circular geometry and can't account for how $x$ and $y$ are coupled. This lack of "directional weight" makes it harder to traverse those narrow, curved valleys where the gradient is much steeper in one direction than the other.To take this further, the next logical step would be implementing an Adaptive Mass Matrix. By learning the covariance structure of the distribution during the warmup phase, the sampler could "stretch" its momentum to match the local curvature. Moving toward a Diagonal or Dense Metric would essentially give the sampler "snow tires" for these tricky landscapes, decoupling the parameters and allowing the Hamiltonian trajectories to glide through high-curvature regions with much higher efficiency.
 
 \section{AI Collaboration}
 
-Reflect on your use of AI assistants:
-\begin{itemize}
-    \item Which AI tools did you use and for what purposes? Through what interfaces (e.g., chat, code completion, coding agents, $\ldots$)?
-    \item What prompting strategies were effective? What kind of context or instructions helped?
-    \item Where did the AI provide useful ideas vs.\ where did you need to correct or guide it?
-    \item What did you learn about working with AI on technical problems?
-\end{itemize}
+The main AI Assistant I used was Google's Gemini through its chatbot interface. Since its popularity I've learned how to optimize the best way for me to use this tool, and throughout this assignment I learned how to effectively use it to learn as I program. In the professional setting, I usually just used it to either write trivial boilerplate code or trivial scripts; however on this assignment I gave it the prompt to respond to me as if it was a tutor. \newline \newline
+The prompt:
+\begin{quote}
+I am a Masters student in bioinformatics who is currently taking a machine learning course:
+the syllabus: <insert syllabus>
 
-% Your content here
+I am currently a software engineer, but don't necessarily know much about machine learning and I am too far removed from upper level math. I need you to help tutor me and break down the questions I have into concepts so that I will learn how to properly do assignments and deepen my knowledge on ai methods. 
+\end{quote}
+
+I found that inserting the syllabus and even the assignment objectives were extremely useful in receiving concepts and information that I am not particularily well-versed in. In addition I was able to couple it with videos on youtube to give me a highlevel understanding of certain concepts, and used gemini to deepen and widen my overall knowledgebase. It also helped me understand what possible next iterations would look like and gave a cost-benefit analysis for its proposal.
+
+However there were definitely limitations to this, especially when it came to debugging. I think this is where Google Gemini tends to struggle compared to other LLMs and tools. I found that its ability to debug and help me understand why certain lines work/don't work isn't necessarily always accurate. So instead of giving it chunks of code, I tend to feed it a couple lines at a time to fully understand what each line is doing and its down stream effects.
 
 \end{document}
